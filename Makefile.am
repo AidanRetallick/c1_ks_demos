@@ -7,7 +7,9 @@ noinst_PROGRAMS = unrotated_square \
                   rotated_square \
                   rotated_square_upgraded \
                   circular_disc \
-                  star_trek
+                  star_trek \
+				  pull_strip \
+				  free_swelling_square
 
 #-KS sources---------------------------------------------------------------
 unrotated_square_SOURCES = \
@@ -20,6 +22,10 @@ circular_disc_SOURCES = \
  circular_disc.cc
 star_trek_SOURCES = \
  star_trek.cc
+pull_strip_SOURCES = \
+ pull_strip.cc
+free_swelling_square_SOURCES = \
+ free_swelling_square.cc
 
 #-KS libraries-------------------------------------------------------------
 unrotated_square_LDADD = -L@libdir@ -lc1_koiter_steigmann \
@@ -31,6 +37,10 @@ rotated_square_upgraded_LDADD = -L@libdir@ -lc1_koiter_steigmann \
 circular_disc_LDADD = -L@libdir@ -lc1_koiter_steigmann \
  -lgeneric $(EXTERNAL_LIBS) $(FLIBS)
 star_trek_LDADD = -L@libdir@ -lc1_koiter_steigmann \
+ -lgeneric $(EXTERNAL_LIBS) $(FLIBS)
+pull_strip_LDADD = -L@libdir@ -lc1_koiter_steigmann \
+ -lgeneric $(EXTERNAL_LIBS) $(FLIBS)
+free_swelling_square_LDADD = -L@libdir@ -lc1_koiter_steigmann \
  -lgeneric $(EXTERNAL_LIBS) $(FLIBS)
 #circular_sector_LDADD = -L@libdir@ -lc1_koiter_steigmann \
 # -lgeneric $(EXTERNAL_LIBS) $(FLIBS)

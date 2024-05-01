@@ -500,10 +500,10 @@ namespace Parameters
   /// Which case are we doing
   unsigned Problem_case=Clamped_validation; // Nonaxisymmetric_shear_buckling; // Axisymmetric_shear_buckling;
 
-  // Ellipse half axis
+  /// Ellipse half x-axis
   double A = 1.0;
 
-  // Other ellipse half axis
+  /// Ellipse half y-axis
   double B = 1.0;
 
   /// The plate thickness
@@ -512,20 +512,27 @@ namespace Parameters
   /// Poisson ratio
   double Nu = 0.5;
 
+  /// Coefficient of damping
+  double Mu = 1.0e-1;
+
   /// What is this?
   double Eta_u = 1.0; // 12.0 * (1.0 - Nu * Nu) / (Thickness * Thickness);
 
   /// What is thissss?
   double Eta_sigma = 1.0;
 
+  /// Pressure scale
+  double P_scale = Thickness*Thickness / (12.0*(1.0-Nu*Nu));
+
   /// Magnitude of pressure
   double P_mag = 0.0;
 
-  /// Magnitude of shear stress
-  double T_mag = 0.0;
-
   /// Element size
   double Element_area = 0.2;
+
+  /// Order of boundary interpolation
+  unsigned Boundary_order = 5;
+
 
   /// Pressure depending on the position (x,y)
   void get_pressure(const Vector<double>& x, double& pressure)
@@ -533,23 +540,35 @@ namespace Parameters
     pressure = P_mag;
   }
 
-  /// Pressure depending on the position (x,y)
-  void
-    get_pressure(const Vector<double>& x,
-		 const Vector<double>& u,
-		 const DenseMatrix<double>& grad_u,
-		 const Vector<double>& n,
-		 Vector<double>& pressure)
+  /// Pressure depending on the position (x,y) and deformation of the sheet
+  void get_pressure(const Vector<double>& x,
+		    const Vector<double>& u,
+		    const DenseMatrix<double>& grad_u,
+		    const Vector<double>& n,
+		    Vector<double>& pressure)
   {
+    // Metric tensor of deformed surface
+    DenseMatrix<double> G(2,2,0.0);
+    for(unsigned alpha = 0; alpha < 2; alpha++)
+    {
+      for (unsigned beta = 0; beta < 2; beta++)
+      {
+	for (unsigned i = 0; i < 3; i++)
+	{
+	  G(alpha,beta) += grad_u(i,0)*grad_u(i,1);
+	}
+      }
+    }
+    // Find the pressure per undeformed area in terms of the pressure per
+    // deformed area
+    double p = sqrt(G(0,0)*G(1,1) - G(1,0)*G(0,1)) * P_mag;
+    // Assign pressure
     pressure.resize(3);
-    pressure[0] = 0.0;
-    pressure[1] = 0.0;
-    pressure[2] = P_mag;
+    pressure[0] = p * n[0];
+    pressure[1] = p * n[1];
+    pressure[2] = p * n[2];
   }
 
-
-  /// Order of boundary interpolation
-  unsigned Boundary_order = 5;
 
   // hierher what are these objects? Shouldn't they be
   // used in the mesh generatino too; surely they encode the
@@ -625,24 +644,55 @@ public:
   /// Update the problem specs before solve: empty
   void actions_before_newton_solve(){}
 
-  /// Things to repeat after every newton iteration
-  void actions_before_newton_step()
+  // /// Things to repeat after every newton iteration
+  // void actions_before_newton_step()
+  // {
+  //   // File prefix and suffix strings
+  //   std::string prefix = Doc_info.directory();
+  //   std::string suffix = std::to_string(Doc_info.number()) + ".txt";
+
+  //   // Get the residual and jacobian
+  //   LinearAlgebraDistribution* dist = dof_distribution_pt();
+  //   DoubleVector residual(dist);
+  //   CRDoubleMatrix jacobian(dist);
+  //   get_jacobian(residual, jacobian);
+  //   residual.output("residual" + suffix);
+  //   jacobian.sparse_indexed_output("jacobian" + suffix);
+
+  //   // [zdec] debug
+  //   // Output the solution after every step
+  //   doc_solution();
+  // }
+
+  /// Temporal error norm function.
+  double global_temporal_error_norm()
   {
-    // File prefix and suffix strings
-    std::string prefix = Doc_info.directory();
-    std::string suffix = std::to_string(Doc_info.number()) + ".txt";
+    double global_error = 0.0;
 
-    // Get the residual and jacobian
-    LinearAlgebraDistribution* dist = dof_distribution_pt();
-    DoubleVector residual(dist);
-    CRDoubleMatrix jacobian(dist);
-    get_jacobian(residual, jacobian);
-    residual.output("residual" + suffix);
-    jacobian.sparse_indexed_output("jacobian" + suffix);
+    // Find out how many nodes there are in the problem
+    unsigned n_node = mesh_pt()->nnode();
 
-    // [zdec] debug
-    // Output the solution after every step
-    doc_solution();
+    // Loop over the nodes and calculate the estimated error in the values
+    for (unsigned i = 0; i < n_node; i++)
+    {
+      double error = 0;
+      Node* node_pt = mesh_pt()->node_pt(i);
+      // Get error in solution: Difference between predicted and actual
+      // value for nodal value 2 (only if we are at a vertex node)
+      if (node_pt->nvalue() > 2)
+      {
+        error = node_pt->time_stepper_pt()->temporal_error_in_value(
+          mesh_pt()->node_pt(i), 2);
+      }
+      // Add the square of the individual error to the global error
+      global_error += error * error;
+    }
+
+    // Divide by the number of nodes
+    global_error /= double(n_node);
+
+    // Return square root...
+    return sqrt(global_error);
   }
 
   /// Doc the solution
@@ -744,6 +794,7 @@ UnstructuredKSProblem<ELEMENT>::UnstructuredKSProblem(const double& element_area
   :
   Element_area(element_area)
 {
+  add_time_stepper_pt(new BDF<2>(true));
   // Build the mesh
   build_mesh();
 
@@ -871,12 +922,12 @@ void UnstructuredKSProblem<ELEMENT>::build_mesh()
   mesh_parameters.internal_open_curves_pt() = Inner_open_boundaries_pt;
 
   // Build an assign bulk mesh
-  Bulk_mesh_pt=new TriangleMesh<ELEMENT>(mesh_parameters);
+  Bulk_mesh_pt=new TriangleMesh<ELEMENT>(mesh_parameters, time_stepper_pt());
 
   // Split elements that have two boundary edges
   TimeStepper* time_stepper_pt = Bulk_mesh_pt->Time_stepper_pt;
-  Bulk_mesh_pt->
-    template split_elements_with_multiple_boundary_edges<ELEMENT>(time_stepper_pt);
+  Bulk_mesh_pt->template
+    split_elements_with_multiple_boundary_edges<ELEMENT>(time_stepper_pt);
 
   // Create the empty constraint element mesh
   Constraint_mesh_pt = new Mesh();
@@ -1090,8 +1141,12 @@ void UnstructuredKSProblem<ELEMENT>::complete_problem_setup()
     // Assign the parameter pointers for the element
     el_pt->thickness_pt() = &Parameters::Thickness;
     el_pt->nu_pt() = &Parameters::Nu;
+    el_pt->mu_pt() = &Parameters::Mu;
     el_pt->eta_u_pt() = &Parameters::Eta_u;
     el_pt->eta_sigma_pt() = &Parameters::Eta_sigma;
+
+    // Enable damping in the z-direction
+    el_pt->enable_damping(2);
 
     // Use the fd jacobian
     // el_pt->enable_finite_difference_jacobian();
@@ -1460,49 +1515,62 @@ int main(int argc, char **argv)
   problem.max_residuals() = 1.0e3;
   problem.max_newton_iterations() = 30;
   problem.newton_solver_tolerance() = 1.0e-11;
+  problem.target_error_safety_factor() = 0.5;
 
   // Set pressure
-  Parameters::P_mag = 1.0e-4;
+  Parameters::P_mag = 1.0e0 * Parameters::P_scale;
   // Set the Poisson ratio
   Parameters::Nu = 0.5;
 
   // Document the initial state
   problem.doc_solution();
-
-  // Describe the dofs
-  ofstream dofstream("RESLT/dofs.txt");
-  problem.describe_dofs(dofstream);
-  dofstream.close();
-
-  // Get the jacobian
-  LinearAlgebraDistribution* dist = problem.dof_distribution_pt();
-  DoubleVector residual(dist);
-  CRDoubleMatrix jacobian(dist);
-  problem.get_jacobian(residual, jacobian);
-  jacobian.sparse_indexed_output("RESLT/jacobian.txt");
-
-  // Solve the system
-  problem.newton_solve();
-  // Document the current solution
+  // Do 10 damped steps
+  double dt = 1.0;
+  double epsilon = 1.0e-6;
+  for (unsigned i_step = 0; i_step < 5; i_step++)
+  {
+    dt = problem.adaptive_unsteady_newton_solve(dt, epsilon);
+    problem.doc_solution();
+  }
+  // Steady solve for pressure
+  problem.steady_newton_solve();
+  // Document the solution
   problem.doc_solution();
 
-  // Increase the pressure
-  Parameters::P_mag *= 10.0;
-  // Solve the system
-  problem.newton_solve();
-  // Document the current solution
-  problem.doc_solution();
+  // // Describe the dofs
+  // ofstream dofstream("RESLT/dofs.txt");
+  // problem.describe_dofs(dofstream);
+  // dofstream.close();
 
-  // Increase the pressure
-  Parameters::P_mag *= 10.0;
-  // Solve the system
-  problem.newton_solve();
-  // Document the current solution
-  problem.doc_solution();
+  // // Get the jacobian
+  // LinearAlgebraDistribution* dist = problem.dof_distribution_pt();
+  // DoubleVector residual(dist);
+  // CRDoubleMatrix jacobian(dist);
+  // problem.get_jacobian(residual, jacobian);
+  // jacobian.sparse_indexed_output("RESLT/jacobian.txt");
 
-  // Output the raw solution dofs
-  DoubleVector dofs(dist);
-  problem.get_dofs(dofs);
-  dofs.output("RESLT/solution_dofs.txt");
+  // // Solve the system
+  // problem.newton_solve();
+  // // Document the current solution
+  // problem.doc_solution();
+
+  // // Increase the pressure
+  // Parameters::P_mag *= 10.0;
+  // // Solve the system
+  // problem.newton_solve();
+  // // Document the current solution
+  // problem.doc_solution();
+
+  // // Increase the pressure
+  // Parameters::P_mag *= 10.0;
+  // // Solve the system
+  // problem.newton_solve();
+  // // Document the current solution
+  // problem.doc_solution();
+
+  // // Output the raw solution dofs
+  // DoubleVector dofs(dist);
+  // problem.get_dofs(dofs);
+  // dofs.output("RESLT/solution_dofs.txt");
 
 } //End of main
