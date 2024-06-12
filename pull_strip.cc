@@ -48,7 +48,7 @@ using namespace oomph;
 namespace Parameters
 {
   /// Rectangle edge length
-  double L = 4.0;
+  double L = 1.0;
 
   /// The plate thickness
   double Thickness = 0.01;
@@ -69,7 +69,7 @@ namespace Parameters
   double T_mag = 0.0;
 
   /// Element size
-  double Element_area = 0.2;
+  double Element_area = 0.01;
 
   /// Output directory
   std::string Output_dir = "RESLT";
@@ -309,6 +309,21 @@ public:
       Bulk_mesh_pt->node_pt(i_node)->set_value(1, 0.0);
     }
   } // End make_linear()
+
+
+  /// Pin all out of plane dofs
+  void pin_out_of_plane()
+  {
+    unsigned n_node = Bulk_mesh_pt->nnode();
+    for(unsigned i_node = 0; i_node < n_node; i_node++)
+    {
+      for(unsigned j_type = 0; j_type < 6; j_type++)
+      {
+        Bulk_mesh_pt->node_pt(i_node)->pin(13+j_type);
+      }
+    }
+  }
+
 
   /// Doc the solution
   void doc_solution(const std::string& comment = "");
@@ -704,16 +719,26 @@ void UnstructuredKSProblem<ELEMENT>::apply_boundary_conditions()
   // each edge. (outlined above)
   Vector<Vector<Vector<unsigned>>> pinned_u_dofs(4, Vector<Vector<unsigned>>(3));
 
-  // We are doing uniaxial strain.
-  // Totally pin the left and right edges, top and bottom can slide in x
+  // We are doing uniaxial stress.
+  // Totally left and right are free to slide in y, bottom can slide in x,
+  // top can slide in x and y to allow for Poisson effect
   for(unsigned i_field = 0; i_field < n_field; i_field++)
   {
-    pinned_u_dofs[1][i_field] = pinned_edge_xn_dof;
-    pinned_u_dofs[3][i_field] = pinned_edge_xn_dof;
+    // Clamp all but u_x
     if(i_field != 0)
     {
-      pinned_u_dofs[2][i_field] = pinned_edge_yn_dof;
       pinned_u_dofs[0][i_field] = pinned_edge_yn_dof;
+    }
+    // Pin all but u_y
+    if(i_field != 1)
+    {
+      pinned_u_dofs[1][i_field] = pinned_edge_xn_dof;
+      pinned_u_dofs[3][i_field] = pinned_edge_xn_dof;
+    }
+    // Pin only u_z
+    if(i_field == 2)
+    {
+      pinned_u_dofs[2][i_field] = pinned_edge_yn_dof;
     }
   }
 
@@ -849,6 +874,8 @@ int main(int argc, char** argv)
   // Use linear stress rather than MR
   CommandLineArgs::specify_command_line_flag("--use_linear_stress");
 
+  // Use the finite difference jacobian
+  CommandLineArgs::specify_command_line_flag("--use_fd_jacobian");
 
   // Parse command line
   CommandLineArgs::parse_and_assign();
@@ -861,24 +888,50 @@ int main(int argc, char** argv)
   problem.max_residuals() = 1.0e3;
   problem.max_newton_iterations() = 30;
 
-  // Document the initial state
-  problem.doc_solution();
+  // // Document the initial state
+  // problem.doc_solution();
 
 
   // Store a pointer to the mesh
   Mesh* mesh_pt = problem.bulk_mesh_pt();
   // Store the number of boundary nodes on the right boundary
-  cout << "get bnodes" << std::endl;
   unsigned n_bnode = mesh_pt->nboundary_node(1);
-  cout << "got bnodes" << std::endl;
+  // Store a sample element pointer
+  KoiterSteigmannC1CurvableBellElement* el_pt =
+    dynamic_cast<KoiterSteigmannC1CurvableBellElement*>(mesh_pt->element_pt(0));
 
   // Displacement of the right boundary
   double u_imposed = 0.0;
+  // Maximum displacement of the right boundary
+  double u_max = 0.5;
+  // Minimum displacement of the right boundary
+  double u_min = -0.1;
   // Increment of the displacement each solve
   double u_inc = 0.05;
 
+  // Pin all out of plane dofs
+  problem.pin_out_of_plane();
+  
+  // Get to maximum compression
+  for(unsigned i = 0; u_imposed > u_min; i++)
+  {
+    // Increment the stretch
+    u_imposed -= u_inc/10.0;
+    // Stretch the sheet by increasing the displacement of the right hand side
+    for(unsigned j_node = 0; j_node < n_bnode; j_node++)
+    {
+      Node* node_pt = mesh_pt->boundary_node_pt(1, j_node);
+      node_pt->set_value(0, u_imposed);
+    }
+    // Solve the system
+    problem.newton_solve();
+  }
+
+  // Document the current solution
+  problem.doc_solution();
+
   // Begin stretching loop
-  for(unsigned i = 0; i < 10; i++)
+  for(unsigned i = 0; u_imposed < u_max; i++)
   {
     // Increment the stretch
     u_imposed += u_inc;
@@ -888,14 +941,10 @@ int main(int argc, char** argv)
       Node* node_pt = mesh_pt->boundary_node_pt(1, j_node);
       node_pt->set_value(0, u_imposed);
     }
-    // [zdec] debug
-    cout << "About to solve" << std::endl;
     // Solve the system
     problem.newton_solve();
-    cout << "Solved" << std::endl;
     // Document the current solution
     problem.doc_solution();
-    cout << "Docced" << std::endl;
   }
 
 } // End of main
