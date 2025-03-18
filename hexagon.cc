@@ -49,22 +49,22 @@ using MathematicalConstants::Pi;
 namespace Parameters
 {
   /// Square edge length
-  double L = 1.0;
+  double L = 2.0 / sqrt(3.0);
 
-  /// Angle of rotation (radians obviously)
-  double Alpha = Pi / 5.0;
+  /// Vertex angle sweep 2pi/6 (radians obviously)
+  double Alpha = Pi / 3.0;
+
+  unsigned N_bound = 6;
 
   /// Plate vertices. For the unrotated square, these coincide with:
   ///     L/2*{(-1,-1), (1,-1), (1,1), (-1,1)}
   Vector<Vector<double>> Vertices = {
-    {-L / 2.0 * cos(Alpha) + L / 2.0 * sin(Alpha),
-     -L / 2.0 * sin(Alpha) - L / 2.0 * cos(Alpha)},
-    {L / 2.0 * cos(Alpha) + L / 2.0 * sin(Alpha),
-     L / 2.0 * sin(Alpha) - L / 2.0 * cos(Alpha)},
-    {L / 2.0 * cos(Alpha) - L / 2.0 * sin(Alpha),
-     L / 2.0 * sin(Alpha) + L / 2.0 * cos(Alpha)},
-    {-L / 2.0 * cos(Alpha) - L / 2.0 * sin(Alpha),
-     -L / 2.0 * sin(Alpha) + L / 2.0 * cos(Alpha)}
+    {L * cos(0.0*Alpha), L * sin(0.0*Alpha)},
+    {L * cos(1.0*Alpha), L * sin(1.0*Alpha)},
+    {L * cos(2.0*Alpha), L * sin(2.0*Alpha)},
+    {L * cos(3.0*Alpha), L * sin(3.0*Alpha)},
+    {L * cos(4.0*Alpha), L * sin(4.0*Alpha)},
+    {L * cos(5.0*Alpha), L * sin(5.0*Alpha)},
   };
 
   /// The plate thickness
@@ -102,10 +102,29 @@ namespace Parameters
 		 const Vector<double>& n,
 		 Vector<double>& pressure)
   {
+    // Metric tensor of deformed surface
+    DenseMatrix<double> G(2,2,0.0);
+    for(unsigned alpha = 0; alpha < 2; alpha++)
+    {
+      G(alpha, alpha) += 1.0;
+      for (unsigned beta = 0; beta < 2; beta++)
+      {
+        G(alpha, beta) += grad_u(alpha, beta) + grad_u(beta, alpha);
+        for (unsigned i = 0; i < 3; i++)
+        {
+          G(alpha, beta) += grad_u(i, alpha) * grad_u(i, beta);
+        }
+      }
+    }
+
+    // Find the pressure per undeformed area in terms of the pressure per
+    // deformed area
+    double p = sqrt(G(0,0)*G(1,1) - G(1,0)*G(0,1)) * P_mag;
+    // Assign pressure
     pressure.resize(3);
-    pressure[0] = 0.0;
-    pressure[1] = 0.0;
-    pressure[2] = P_mag;
+    pressure[0] = p * n[0];
+    pressure[1] = p * n[1];
+    pressure[2] = p * n[2];
   }
 
 
@@ -122,7 +141,13 @@ namespace Parameters
   CurvilineLine Edge_2(Vertices[2], Vertices[3]);
 
   /// Straight edge 3
-  CurvilineLine Edge_3(Vertices[3], Vertices[0]);
+  CurvilineLine Edge_3(Vertices[3], Vertices[4]);
+
+  /// Straight edge 4
+  CurvilineLine Edge_4(Vertices[4], Vertices[5]);
+
+  /// Straight edge 5
+  CurvilineLine Edge_5(Vertices[5], Vertices[0]);
 
   /// Vector container of addresses for iterating over the edges
   Vector<CurvilineGeomObject*> Curviline_edge_pt =
@@ -130,7 +155,9 @@ namespace Parameters
     &Edge_0,
     &Edge_1,
     &Edge_2,
-    &Edge_3
+    &Edge_3,
+    &Edge_4,
+    &Edge_5
   };
 
 
@@ -175,26 +202,28 @@ public:
     delete Boundary1_pt;
     delete Boundary2_pt;
     delete Boundary3_pt;
+    delete Boundary4_pt;
+    delete Boundary5_pt;
   };
 
   /// Things to repeat after every newton iteration
   void actions_before_newton_step()
   {
-  //   // File prefix and suffix strings
-  //   std::string prefix = Doc_info.directory();
-  //   std::string suffix = std::to_string(Doc_info.number()) + ".txt";
+    // File prefix and suffix strings
+    std::string prefix = Doc_info.directory();
+    std::string suffix = std::to_string(Doc_info.number()) + ".txt";
 
-  //   // Get the residual and jacobian
-  //   LinearAlgebraDistribution* dist = dof_distribution_pt();
-  //   DoubleVector residual(dist);
-  //   CRDoubleMatrix jacobian(dist);
-  //   get_jacobian(residual, jacobian);
-  //   residual.output("residual" + suffix);
-  //   jacobian.sparse_indexed_output("jacobian" + suffix);
+    // Get the residual and jacobian
+    LinearAlgebraDistribution* dist = dof_distribution_pt();
+    DoubleVector residual(dist);
+    CRDoubleMatrix jacobian(dist);
+    get_jacobian(residual, jacobian);
+    residual.output("residual" + suffix);
+    jacobian.sparse_indexed_output("jacobian" + suffix);
 
-  //   // [zdec] debug
-  //   // Output the solution after every step
-  //   doc_solution();
+    // [zdec] debug
+    // Output the solution after every step
+    // doc_solution();
   }
 
   /// Print information about the parameters we are trying to solve for.
@@ -203,42 +232,11 @@ public:
     oomph_info << "-------------------------------------------------------"
                << std::endl;
     oomph_info << "Solving for P = " << Parameters::P_mag << std::endl;
+    oomph_info << "Solving for T = " << Parameters::T_mag << std::endl;
     oomph_info << "         step = " << Doc_info.number() << std::endl;
     oomph_info << "-------------------------------------------------------"
                << std::endl;
   }
-
-  /// Make the problem linear (biharmonic) by pinning all in-plane dofs and
-  /// setting eta=0
-  void make_linear()
-  {
-    // Remove stretching coupling
-    Parameters::Eta_sigma = 0.0;
-
-    // Pin all in-plane displacements (first twelve values)
-    unsigned n_node = Bulk_mesh_pt->nnode();
-    unsigned n_type = 12;
-    for(unsigned i_node = 0; i_node < n_node; i_node++)
-    {
-      for(unsigned j_type = 0; j_type < n_type; j_type++)
-      {
-	Bulk_mesh_pt->node_pt(i_node)->pin(j_type);
-	Bulk_mesh_pt->node_pt(i_node)->set_value(j_type, 0.0);
-      }
-    }
-
-    // Update the corner constraintes based on boundary conditions
-    unsigned n_el = Constraint_mesh_pt->nelement();
-    for(unsigned i_el = 0; i_el < n_el; i_el++)
-    {
-      dynamic_cast<DuplicateNodeConstraintElement*>
-        (Constraint_mesh_pt->element_pt(i_el))
-        ->validate_and_pin_redundant_constraints();
-    }
-
-    // Reassign the equation numbers
-    assign_eqn_numbers();
-  } // End make_linear()
 
   /// Doc the solution
   void doc_solution(const std::string& comment = "");
@@ -300,22 +298,17 @@ private:
   /// Polyline defining boundary 3
   TriangleMeshPolyLine* Boundary3_pt;
 
+  /// Polyline defining boundary 4
+  TriangleMeshPolyLine* Boundary4_pt;
+
+  /// Polyline defining boundary 5
+  TriangleMeshPolyLine* Boundary5_pt;
+
   /// Doc info object for labeling output
   DocInfo Doc_info;
 
   /// Trace file to document norm of solution
   ofstream Trace_file;
-
-  /// Keep track of boundary ids, (b)ottom, (r)ight, (t)op, (l)eft
-  // (slightly redundant in this example)
-  // ((after rotation this naming convention is unhelpful))
-  enum
-  {
-    Boundary_b_bnum = 0,
-    Boundary_r_bnum = 1,
-    Boundary_t_bnum = 2,
-    Boundary_l_bnum = 3
-  };
 
   /// Pointer to "bulk" mesh
   TriangleMesh<ELEMENT>* Bulk_mesh_pt;
@@ -388,12 +381,16 @@ void UnstructuredKSProblem<ELEMENT>::build_mesh()
   Vector<double> vertex1 = Parameters::Vertices[1];
   Vector<double> vertex2 = Parameters::Vertices[2];
   Vector<double> vertex3 = Parameters::Vertices[3];
+  Vector<double> vertex4 = Parameters::Vertices[4];
+  Vector<double> vertex5 = Parameters::Vertices[5];
 
   // Declare the edges...
   Vector<Vector<double>> edge0(2, Vector<double>(2, 0.0));
   Vector<Vector<double>> edge1(2, Vector<double>(2, 0.0));
   Vector<Vector<double>> edge2(2, Vector<double>(2, 0.0));
   Vector<Vector<double>> edge3(2, Vector<double>(2, 0.0));
+  Vector<Vector<double>> edge4(2, Vector<double>(2, 0.0));
+  Vector<Vector<double>> edge5(2, Vector<double>(2, 0.0));
 
   // ...and assign their endpoints
   edge0[0] = vertex0;
@@ -403,20 +400,28 @@ void UnstructuredKSProblem<ELEMENT>::build_mesh()
   edge2[0] = vertex2;
   edge2[1] = vertex3;
   edge3[0] = vertex3;
-  edge3[1] = vertex0;
+  edge3[1] = vertex4;
+  edge4[0] = vertex4;
+  edge4[1] = vertex5;
+  edge5[0] = vertex5;
+  edge5[1] = vertex0;
 
   // Define boundaries from edges
   Boundary0_pt = new TriangleMeshPolyLine(edge0, 0);
   Boundary1_pt = new TriangleMeshPolyLine(edge1, 1);
   Boundary2_pt = new TriangleMeshPolyLine(edge2, 2);
   Boundary3_pt = new TriangleMeshPolyLine(edge3, 3);
+  Boundary4_pt = new TriangleMeshPolyLine(edge4, 4);
+  Boundary5_pt = new TriangleMeshPolyLine(edge5, 5);
 
   // Create closed outer boundary
-  Vector<TriangleMeshCurveSection*> boundary_polyline_pt(4);
+  Vector<TriangleMeshCurveSection*> boundary_polyline_pt(6);
   boundary_polyline_pt[0] = Boundary0_pt;
   boundary_polyline_pt[1] = Boundary1_pt;
   boundary_polyline_pt[2] = Boundary2_pt;
   boundary_polyline_pt[3] = Boundary3_pt;
+  boundary_polyline_pt[4] = Boundary4_pt;
+  boundary_polyline_pt[5] = Boundary5_pt;
   Boundary_pt = new TriangleMeshClosedCurve(boundary_polyline_pt);
 
   // Define mesh parameters
@@ -439,7 +444,7 @@ void UnstructuredKSProblem<ELEMENT>::build_mesh()
   // Add extra nodes at boundaries and constrain the dofs there.
   duplicate_corner_nodes();
 
-  //Add submesh to problem
+  // Add submesh to problem
   add_sub_mesh(Bulk_mesh_pt);
   add_sub_mesh(Constraint_mesh_pt);
 
@@ -495,7 +500,7 @@ template <class ELEMENT>
 void UnstructuredKSProblem<ELEMENT >::duplicate_corner_nodes()
 {
   // Loop over the sections of the external boundary
-  unsigned n_bound = 4;
+  unsigned n_bound = Parameters::N_bound;
   for(unsigned i_bound = 0; i_bound < n_bound; i_bound++)
   {
     // Store the index of the next boundary
@@ -609,7 +614,7 @@ void UnstructuredKSProblem<ELEMENT>::rotate_edge_degrees_of_freedom(
   Mesh* const& bulk_mesh_pt)
 {
   // Get the number of boundaries
-  unsigned n_bound = 4;
+  unsigned n_bound = Parameters::N_bound;
 
   // Loop over the bulk elements
   unsigned n_element = Bulk_mesh_pt->nelement();
@@ -754,30 +759,30 @@ void UnstructuredKSProblem<ELEMENT>::apply_boundary_conditions()
   //------------------------------------------------------------------
   //------------------------------------------------------------------
 
+  // Number of displacements
   unsigned n_field = 3;
-  unsigned n_bound = 4;
+  // Number of boundaries
+  unsigned n_bound = Parameters::N_bound;
 
   // Vector containers to store which boundary conditions we are applying to
   // each edge. (outlined above)
-  Vector<Vector<Vector<unsigned>>> pinned_u_dofs(4, Vector<Vector<unsigned>>(3));
+  Vector<Vector<Vector<unsigned>>> pinned_u_dofs(n_bound, Vector<Vector<unsigned>>(n_field));
 
-  // Set bonudary conditions for each field along each edge
+  // Set the boundary conditions for each field and bounadry
   for(unsigned i_field = 0; i_field < n_field; i_field++)
-  {
-    for(unsigned j_bound = 0; j_bound < n_bound; j_bound++)
+  {  
+    for (unsigned i_bound = 0; i_bound < n_bound; i_bound++)
     {
-      if(i_field == 2)
+      if (i_field == 2)
       {
-	pinned_u_dofs[j_bound][i_field] = fully_clamped_pinned_dof;
-	// pinned_u_dofs[j_bound][i_field] = pinned_edge_pinned_dof;
+        pinned_u_dofs[i_bound][i_field] = fully_clamped_pinned_dof;
       }
       else
       {
-	pinned_u_dofs[j_bound][i_field] = pinned_edge_pinned_dof;
+        pinned_u_dofs[i_bound][i_field] = pinned_edge_pinned_dof;
       }
     }
   }
-
 
   // Loop over all the boundaries in our bulk mesh
   for (unsigned b = 0; b < n_bound; b++)
@@ -814,6 +819,7 @@ void UnstructuredKSProblem<ELEMENT>::apply_boundary_conditions()
     } // end for loop over elements on b [e]
   } // end for loop over boundaries [b]
 
+
   // Update the corner constraintes based on boundary conditions
   unsigned n_el = Constraint_mesh_pt->nelement();
   for(unsigned i_el = 0; i_el < n_el; i_el++)
@@ -840,7 +846,7 @@ void UnstructuredKSProblem<ELEMENT>::doc_solution(const std::string& comment)
   // element outline)
   unsigned npts = 2;
   sprintf(filename,
-          "%s/coarse_soln_%i.dat",
+          "%s/coarse_soln%i.dat",
           Doc_info.directory().c_str(),
           Doc_info.number());
   some_file.open(filename);
@@ -853,7 +859,7 @@ void UnstructuredKSProblem<ELEMENT>::doc_solution(const std::string& comment)
   // interpolation.
   npts = 20;
   sprintf(filename,
-          "%s/soln_%i.dat",
+          "%s/soln%i.dat",
           Doc_info.directory().c_str(),
           Doc_info.number());
   some_file.open(filename);
@@ -886,12 +892,9 @@ int main(int argc, char** argv)
   problem.max_newton_iterations() = 30;
   problem.newton_solver_tolerance() = 1.0e-11;
 
-  // Set pressure
-  Parameters::P_mag = 1.0e-3;
-  // Set the Poisson ratio
-  Parameters::Nu = 0.5;
-
-  // Document the initial state
+  // Solve the system
+  problem.newton_solve();
+  // Document the current solution
   problem.doc_solution();
 
   // Describe the dofs
@@ -899,19 +902,19 @@ int main(int argc, char** argv)
   problem.describe_dofs(dofstream);
   dofstream.close();
 
-  // Get the jacobian
-  LinearAlgebraDistribution* dist = problem.dof_distribution_pt();
-  DoubleVector residual(dist);
-  CRDoubleMatrix jacobian(dist);
-  problem.get_jacobian(residual, jacobian);
-  jacobian.sparse_indexed_output("RESLT/jacobian.txt");
+  // Set pressure
+  Parameters::P_mag = 0.0;
+  double p_inc = 0.5e-3;
+  // Set the Poisson ratio
+  Parameters::Nu = 0.5;
 
-  // Make the problem linear
-  problem.make_linear();
-
-  // Solve the system
-  problem.newton_solve();
-  // Document the current solution
-  problem.doc_solution();
+  for( unsigned i = 0; i < 100; i++ )
+  {
+    Parameters::P_mag += p_inc;
+    // Solve the system
+    problem.newton_solve();
+    // Document the current solution
+    problem.doc_solution();
+  }
 
 } // End of main

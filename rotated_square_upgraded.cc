@@ -194,6 +194,60 @@ public:
   /// Update after solve (empty)
   void actions_after_newton_solve() {}
 
+  /// Make the problem linear (biharmonic) by pinning all in-plane dofs and
+  /// setting eta=0
+  void make_linear()
+  {
+    // Remove stretching coupling
+    Parameters::Eta_sigma = 0.0;
+
+    // Pin all in-plane displacements (first twelve values)
+    unsigned n_node = Bulk_mesh_pt->nnode();
+    unsigned n_type = 12;
+    for(unsigned i_node = 0; i_node < n_node; i_node++)
+    {
+      for(unsigned j_type = 0; j_type < n_type; j_type++)
+      {
+	Bulk_mesh_pt->node_pt(i_node)->pin(j_type);
+	Bulk_mesh_pt->node_pt(i_node)->set_value(j_type, 0.0);
+      }
+    }
+
+    // Pin internal in-plane and
+    unsigned n_bound = Bulk_mesh_pt->nboundary();
+    for(unsigned b_bound = 0; b_bound < n_bound; b_bound++)
+    {
+      unsigned n_el = Bulk_mesh_pt->nboundary_element(b_bound);
+      for(unsigned i_el = 0; i_el < n_el; i_el++)
+      {
+        unsigned n_type =
+          Parameters::Boundary_order * (Parameters::Boundary_order - 1) / 2;
+        for (unsigned j_type = 0; j_type < n_type; j_type++)
+        {
+          Bulk_mesh_pt->boundary_element_pt(b_bound, i_el)
+		      ->internal_data_pt(0)->pin(j_type);
+          Bulk_mesh_pt->boundary_element_pt(b_bound, i_el)
+		      ->internal_data_pt(0)->set_value(j_type, 0.0);
+          Bulk_mesh_pt->boundary_element_pt(b_bound, i_el)
+		      ->internal_data_pt(1)->pin(j_type);
+          Bulk_mesh_pt->boundary_element_pt(b_bound, i_el)
+		      ->internal_data_pt(1)->set_value(j_type, 0.0);
+        }
+      }
+    }
+
+    // Update the corner constraints based on boundary conditions
+    unsigned n_el = Constraint_mesh_pt->nelement();
+    for(unsigned i_el = 0; i_el < n_el; i_el++)
+    {
+      dynamic_cast<DuplicateNodeConstraintElement*>(
+	Constraint_mesh_pt->element_pt(i_el))
+	->validate_and_pin_redundant_constraints();
+    }
+
+    // Reassign the equation numbers
+    assign_eqn_numbers();
+  } // End make_linear()
 
   /// Doc the solution
   void doc_solution(const std::string& comment="");
@@ -733,23 +787,31 @@ void UnstructuredKSProblem<ELEMENT>::apply_boundary_conditions()
   //------------------------------------------------------------------
 
   unsigned n_field = 3;
+  unsigned n_bound = 4;
 
   // Vector containers to store which boundary conditions we are applying to
   // each edge. (outlined above)
   Vector<Vector<Vector<unsigned>>> pinned_u_dofs(4, Vector<Vector<unsigned>>(3));
 
-  // Pin all three displacements everywhere
+  // Set boundary conditions for each field along each edge
   for(unsigned i_field = 0; i_field < n_field; i_field++)
   {
-    pinned_u_dofs[0][i_field] = pinned_edge_pinned_dof;
-    pinned_u_dofs[1][i_field] = pinned_edge_pinned_dof;
-    pinned_u_dofs[2][i_field] = pinned_edge_pinned_dof;
-    pinned_u_dofs[3][i_field] = pinned_edge_pinned_dof;
+    for(unsigned j_bound = 0; j_bound < n_bound; j_bound++)
+    {
+      if(i_field == 2)
+      {
+	pinned_u_dofs[j_bound][i_field] = fully_clamped_pinned_dof;
+	// pinned_u_dofs[j_bound][i_field] = pinned_edge_pinned_dof;
+      }
+      else
+      {
+	pinned_u_dofs[j_bound][i_field] = pinned_edge_pinned_dof;
+      }
+    }
   }
 
 
   // Loop over all the boundaries in our bulk mesh
-  unsigned n_bound = Bulk_mesh_pt->nboundary();
   for (unsigned b = 0; b < n_bound; b++)
   {
     // Number of elements on b
@@ -932,7 +994,7 @@ void UnstructuredKSProblem<ELEMENT>::doc_solution(const
   // Number of plot points for fine (full) output. Lots of plot points so
   // we see the goodness of the high-order Hermite/Bell
   // interpolation.
-  npts = 10;
+  npts = 20;
   sprintf(filename, "%s/soln_%i.dat",
 	  Doc_info.directory().c_str(),
 	  Doc_info.number());
@@ -988,6 +1050,9 @@ int main(int argc, char **argv)
   CRDoubleMatrix jacobian(dist);
   problem.get_jacobian(residual, jacobian);
   jacobian.sparse_indexed_output("RESLT/jacobian.txt");
+
+  // Make the problem linear
+  problem.make_linear();
 
   // Solve the system
   problem.newton_solve();

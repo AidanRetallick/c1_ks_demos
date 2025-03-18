@@ -521,14 +521,14 @@ namespace Parameters
   /// What is thissss?
   double Eta_sigma = 1.0;
 
-  /// Pressure scale
-  double P_scale = Thickness*Thickness / (12.0*(1.0-Nu*Nu));
-
   /// Magnitude of pressure
   double P_mag = 0.0;
 
+  /// Magnitude of shear stress
+  double T_mag = 0.0;
+
   /// Element size
-  double Element_area = 0.2;
+  double Element_area = 0.5;
 
   /// Order of boundary interpolation
   unsigned Boundary_order = 5;
@@ -551,14 +551,17 @@ namespace Parameters
     DenseMatrix<double> G(2,2,0.0);
     for(unsigned alpha = 0; alpha < 2; alpha++)
     {
+      G(alpha, alpha) += 1.0;
       for (unsigned beta = 0; beta < 2; beta++)
       {
+        G(alpha, beta) += grad_u(alpha, beta) + grad_u(beta, alpha);
 	for (unsigned i = 0; i < 3; i++)
 	{
-	  G(alpha,beta) += grad_u(i,0)*grad_u(i,1);
+          G(alpha, beta) += grad_u(i, alpha) * grad_u(i, beta);
 	}
       }
     }
+
     // Find the pressure per undeformed area in terms of the pressure per
     // deformed area
     double p = sqrt(G(0,0)*G(1,1) - G(1,0)*G(0,1)) * P_mag;
@@ -1200,8 +1203,16 @@ void UnstructuredKSProblem<ELEMENT>::apply_boundary_conditions()
   // Pin all three displacements everywhere
   for(unsigned i_field = 0; i_field < n_field; i_field++)
   {
-    pinned_u_dofs[Outer_boundary0][i_field] = pinned_edge_pinned_dof;
-    pinned_u_dofs[Outer_boundary1][i_field] = pinned_edge_pinned_dof;
+    if (i_field == 2)
+    {
+      pinned_u_dofs[Outer_boundary0][i_field] = fully_clamped_pinned_dof;
+      pinned_u_dofs[Outer_boundary1][i_field] = fully_clamped_pinned_dof;
+    }
+    else
+    {
+      pinned_u_dofs[Outer_boundary0][i_field] = pinned_edge_pinned_dof;
+      pinned_u_dofs[Outer_boundary1][i_field] = pinned_edge_pinned_dof;
+    }
   }
 
 
@@ -1460,7 +1471,7 @@ void UnstructuredKSProblem<ELEMENT>::doc_solution(const
   char filename[100];
 
   // Number of plot points
-  unsigned npts = 30;
+  unsigned npts = 20;
 
   sprintf(filename,"%s/soln%i.dat",Doc_info.directory().c_str(),
           Doc_info.number());
@@ -1487,8 +1498,7 @@ void UnstructuredKSProblem<ELEMENT>::doc_solution(const
     ->interpolated_koiter_steigmann_disp(s, u_centre);
 
   Trace_file << Parameters::P_mag << " "
-	     << Parameters::T_mag << " "
-             << u_centre[0][0] << " "
+      << u_centre[0][0] << " "
 	     << u_centre[1][0] << " "
 	     << u_centre[2][0] << " "
              << Doc_info.number() << endl;
@@ -1517,25 +1527,36 @@ int main(int argc, char **argv)
   problem.newton_solver_tolerance() = 1.0e-11;
   problem.target_error_safety_factor() = 0.5;
 
-  // Set pressure
-  Parameters::P_mag = 1.0e0 * Parameters::P_scale;
-  // Set the Poisson ratio
-  Parameters::Nu = 0.5;
-
   // Document the initial state
   problem.doc_solution();
-  // Do 10 damped steps
-  double dt = 1.0;
-  double epsilon = 1.0e-6;
-  for (unsigned i_step = 0; i_step < 5; i_step++)
+
+  // Set the Poisson ratio
+  Parameters::Nu = 0.5;
+  // Set pressure
+  Parameters::P_mag = 0.0;
+  double p_inc = 0.1e-3;
+
+  for( unsigned i = 0; i < 1; i++ )
   {
-    dt = problem.adaptive_unsteady_newton_solve(dt, epsilon);
+    Parameters::P_mag += p_inc;
+    // Solve the system
+    problem.newton_solve();
+    // Document the current solution
     problem.doc_solution();
   }
+
+  // // Do 10 damped steps
+  // double dt = 1.0;
+  // double epsilon = 1.0e-6;
+  // for (unsigned i_step = 0; i_step < 5; i_step++)
+  // {
+  //   dt = problem.adaptive_unsteady_newton_solve(dt, epsilon);
+  //   problem.doc_solution();
+  // }
   // Steady solve for pressure
-  problem.steady_newton_solve();
-  // Document the solution
-  problem.doc_solution();
+  // problem.steady_newton_solve();
+  // // Document the solution
+  // problem.doc_solution();
 
   // // Describe the dofs
   // ofstream dofstream("RESLT/dofs.txt");

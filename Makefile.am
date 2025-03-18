@@ -7,6 +7,7 @@ noinst_PROGRAMS = unrotated_square \
                   rotated_square \
                   rotated_square_upgraded \
                   circular_disc \
+				  hexagon \
                   star_trek \
 				  pull_strip \
 				  free_swelling_square
@@ -18,6 +19,8 @@ rotated_square_SOURCES = \
  rotated_square.cc
 rotated_square_upgraded_SOURCES = \
  rotated_square_upgraded.cc
+hexagon_SOURCES = \
+ hexagon.cc
 circular_disc_SOURCES = \
  circular_disc.cc
 star_trek_SOURCES = \
@@ -35,6 +38,8 @@ rotated_square_LDADD = -L@libdir@ -lc1_koiter_steigmann \
 rotated_square_upgraded_LDADD = -L@libdir@ -lc1_koiter_steigmann \
  -lgeneric $(EXTERNAL_LIBS) $(FLIBS)
 circular_disc_LDADD = -L@libdir@ -lc1_koiter_steigmann \
+ -lgeneric $(EXTERNAL_LIBS) $(FLIBS)
+hexagon_LDADD = -L@libdir@ -lc1_koiter_steigmann \
  -lgeneric $(EXTERNAL_LIBS) $(FLIBS)
 star_trek_LDADD = -L@libdir@ -lc1_koiter_steigmann \
  -lgeneric $(EXTERNAL_LIBS) $(FLIBS)
